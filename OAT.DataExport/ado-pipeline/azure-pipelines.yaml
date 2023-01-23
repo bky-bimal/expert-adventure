@@ -1,0 +1,93 @@
+name: $(Build.Reason)_$(SourceBranchName)$(Rev:.r)
+
+resources:
+  repositories:
+  - repository: ado-pipeline-templates
+    type: git
+    name: DevOps/ado-pipeline-templates
+    ref: refs/tags/v1.0.0
+
+
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - group: tf-ssh-eclipse
+  - name: jobName
+    value: Deploy
+  
+stages:
+  - stage: Review
+    variables:
+    - group: vg-tf-aws-review
+    - name: service_connection
+      value: 'review-redtailone'
+  
+    jobs:   
+    - deployment: ${{ variables.jobName }}
+      environment: env-tf-redtail-review
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - checkout: self
+  
+            - task: InstallSSHKey@0
+              inputs:
+                knownHostsEntry: $(SSH_KNOWN_HOSTS)
+                sshKeySecureFile: $(SECURE_FILE_NAME)
+                sshPassphrase: $(SSH_PASSPHRASE)
+                sshPublicKey: $(SSH_PUBLIC_KEY)
+  
+            - task: DotNetCoreCLI@2
+              inputs:
+                command: 'build'
+                projects: 'src/OAT.DataExport/OAT.DataExport.csproj'
+                arguments: '--configuration Release'
+
+            - task: DotNetCoreCLI@2
+              inputs:
+                command: 'custom'
+                custom: 'tool'
+                arguments: 'install -g Amazon.Lambda.Tools'
+
+
+            - task: DotNetCoreCLI@2
+              inputs:
+                  command: 'custom'
+                  custom: 'add'
+                  arguments: 'src/OAT.DataExport/OAT.DataExport.csproj package Amazon.Lambda.AspNetCoreServer'
+
+              
+
+
+            - task: DotNetCoreCLI@2
+              inputs:
+                command: 'custom'
+                workingDirectory: 'src/OAT.DataExport/'
+                custom: 'lambda'
+                arguments: 'package -c Release -o 1.zip'
+
+
+            - task: PublishPipelineArtifact@1
+              displayName: 'Publish Pipeline Artifact'
+              inputs:
+                targetPath: '$(Build.ArtifactStagingDirectory)'
+                artifact: lala
+
+            - task: DownloadBuildArtifacts@0
+              inputs:
+                buildType: 'current'
+                downloadType: 'single'
+                artifactName: 'lala'
+                downloadPath: '$(System.ArtifactsDirectory)'
+
+            - template: terraform/tf-workflow.yaml@ado-pipeline-templates
+              parameters:
+                awsRegion: $(vg_aws_region)
+                planFile: $(vg_tf_plan_file)
+                serviceConnection: ${{ variables.service_connection }}
+                terraformVersion: $(vg_tf_version)
+                varFile: $(vg_tf_var_file)
+
